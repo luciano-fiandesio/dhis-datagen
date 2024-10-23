@@ -1,0 +1,24 @@
+
+    [
+        {
+        "column":"first_name",
+        "type": "string",
+        "size": 200,
+        "generator": "random"
+     },
+     {
+        "column":"last_name",
+        "type": "string",
+        "size": 200,
+        "generator": "random"
+     },
+     {
+        "column":"age",
+        "type": "int",
+        "generator": "random"
+     }
+    ]
+     
+ 
+ 
+ 
