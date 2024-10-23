@@ -1,13 +1,16 @@
 import argparse
+import datetime
 import json
 import os
 import random
-import sqlite3
 import string
 import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Dict, List
+
+import psycopg2
+from faker import Faker
 
 
 @dataclass
@@ -18,9 +21,11 @@ class ColumnDefinition:
     type: str
     size: int = None
     generator: str = None
+    faker_method: str = None  # e.g. "name_female", "email", "address"
     min: int = None
     max: int = None
     query: str = None
+    sql: str = None  # SQL query for db-lookup generator
 
 
 class ConfigurationError(Exception):
@@ -67,6 +72,20 @@ def validate_json_model(file_path: str) -> dict:
                 raise ConfigurationError(
                     f"Column definition {idx + 1} missing required fields: {missing_fields}"
                 )
+
+            # Validate Faker configuration
+            if col_def.get("generator") == "faker":
+                if "faker_method" not in col_def:
+                    raise ConfigurationError(
+                        f"Column definition {idx + 1} is missing required 'faker_method' for faker generator"
+                    )
+                # Verify the faker method exists
+                faker = Faker()
+                if not hasattr(faker, col_def["faker_method"]):
+                    raise ConfigurationError(
+                        f"Column definition {idx + 1} specifies invalid faker_method: {col_def['faker_method']}"
+                    )
+
         return file_path
 
     except Exception as e:
@@ -86,10 +105,10 @@ class DataGenerator(ABC):
 class RandomStringGenerator(DataGenerator):
     """Generates random string values"""
 
-    def __init__(self, size: int, min_length: int = None, max_length: int = None):
-        self.size = size
-        self.min_length = min_length or 1
-        self.max_length = max_length or size
+    def __init__(self, size: int = 10, min_length: int = None, max_length: int = None):
+        self.size = size or 10  # Default to 10 if size is None
+        self.min_length = min_length if min_length is not None else 1
+        self.max_length = max_length if max_length is not None else self.size
 
     def generate(self) -> str:
         length = random.randint(self.min_length, self.max_length)
@@ -111,10 +130,63 @@ class RandomIntGenerator(DataGenerator):
         return random.randint(self.min_val, self.max_val)
 
 
+class RandomFloatGenerator(DataGenerator):
+    """Generates random float values"""
+
+    def __init__(self, min_val: float = 0.0, max_val: float = 100.0):
+        self.min_val = min_val
+        self.max_val = max_val
+
+    def generate(self) -> float:
+        if self.min_val is None:
+            self.min_val = 0.0
+        if self.max_val is None:
+            self.max_val = sys.float_info.max
+        return random.uniform(self.min_val, self.max_val)
+
+
+class RandomDateTimeGenerator(DataGenerator):
+    """Generates random datetime values between specified years"""
+
+    def __init__(self, min_year: int = None, max_year: int = None):
+        current_year = datetime.datetime.now().year
+        self.start_date = datetime.datetime(
+            min_year if min_year else current_year - 1, 1, 1
+        )
+        self.end_date = datetime.datetime(
+            max_year if max_year else current_year, 12, 31, 23, 59, 59
+        )
+
+    def generate(self) -> datetime.datetime:
+        time_between_dates = self.end_date - self.start_date
+        days_between_dates = time_between_dates.days
+        random_number_of_days = random.randrange(days_between_dates)
+        random_date = self.start_date + datetime.timedelta(days=random_number_of_days)
+        return random_date
+
+
+class FakerGenerator(DataGenerator):
+    """Generates fake data using the Faker library"""
+
+    def __init__(self, faker_method: str = "text"):
+        self.faker = Faker()
+        self.faker_method = faker_method
+
+    def generate(self) -> str:
+        if not self.faker_method:
+            return self.faker.text()
+
+        faker_function = getattr(self.faker, self.faker_method, None)
+        if faker_function is None:
+            raise ValueError(f"Invalid Faker method: {self.faker_method}")
+
+        return faker_function()
+
+
 class QueryBasedGenerator(DataGenerator):
     """Generates values based on database queries"""
 
-    def __init__(self, connection: sqlite3.Connection, query: str):
+    def __init__(self, connection, query: str):
         self.connection = connection
         self.query = query
         self._cache = None
@@ -133,11 +205,13 @@ class QueryBasedGenerator(DataGenerator):
 class DataGeneratorFactory:
     """Factory class to create appropriate generators based on column definitions"""
 
-    def __init__(self, db_connection: sqlite3.Connection = None):
+    def __init__(self, db_connection=None):
         self.db_connection = db_connection
 
     def create_generator(self, column_def: ColumnDefinition) -> DataGenerator:
-        if column_def.generator == "random":
+        if column_def.generator == "faker":
+            return FakerGenerator(faker_method=column_def.faker_method)
+        elif column_def.generator == "random":
             if column_def.type == "string":
                 return RandomStringGenerator(
                     size=column_def.size,
@@ -148,7 +222,19 @@ class DataGeneratorFactory:
                 return RandomIntGenerator(
                     min_val=column_def.min, max_val=column_def.max
                 )
-        elif column_def.generator.startswith("select"):
+            elif column_def.type == "float":
+                return RandomFloatGenerator(
+                    min_val=column_def.min, max_val=column_def.max
+                )
+            elif column_def.type == "datetime":
+                return RandomDateTimeGenerator(
+                    min_year=column_def.min, max_year=column_def.max
+                )
+        elif column_def.generator == "db-lookup":
+            if self.db_connection is None:
+                raise ValueError("Database connection required for db-lookup generator")
+            return QueryBasedGenerator(self.db_connection, column_def.sql)
+        elif column_def.generator.startswith("select"):  # Keep legacy support
             if self.db_connection is None:
                 raise ValueError(
                     "Database connection required for query-based generator"
@@ -161,10 +247,32 @@ class DataGeneratorFactory:
 class DataGeneratorOrchestrator:
     """Main class to orchestrate data generation"""
 
-    def __init__(self, config_file: str, db_connection: sqlite3.Connection = None):
+    def __init__(self, config_file: str, db_config_file: str = "db_config.json"):
         self.config = self._load_config(config_file)
-        self.factory = DataGeneratorFactory(db_connection)
+        self.db_config = self._load_db_config(db_config_file)
+        self.db_connection = self._create_db_connection()
+        self.factory = DataGeneratorFactory(self.db_connection)
         self.generators = self._setup_generators()
+
+    def _load_db_config(self, config_file: str) -> dict:
+        if not os.path.exists(config_file):
+            return None
+        with open(config_file, "r") as f:
+            return json.load(f)
+
+    def _create_db_connection(self):
+        if not self.db_config:
+            return None
+        try:
+            return psycopg2.connect(
+                host=self.db_config["database"]["host"],
+                port=self.db_config["database"]["port"],
+                dbname=self.db_config["database"]["name"],
+                user=self.db_config["database"]["user"],
+                password=self.db_config["database"]["password"],
+            )
+        except psycopg2.Error as e:
+            raise ConfigurationError(f"Failed to connect to database: {str(e)}")
 
     def _load_config(self, config_file: str) -> List[ColumnDefinition]:
         with open(config_file, "r") as f:
@@ -202,10 +310,6 @@ def parse_arguments():
         default="output.csv",
         help="Output CSV file path (default: output.csv)",
     )
-    parser.add_argument(
-        "--database",
-        help="SQLite database file path (required for query-based generators)",
-    )
 
     return parser.parse_args()
 
@@ -220,15 +324,8 @@ def main():
         config = validate_json_model(args.model)
 
         # Set up database connection if provided
-        db_connection = None
-        if args.database:
-            try:
-                db_connection = sqlite3.connect(args.database)
-            except sqlite3.Error as e:
-                raise ConfigurationError(f"Failed to connect to database: {str(e)}")
-
-        # Create orchestrator
-        orchestrator = DataGeneratorOrchestrator(config, db_connection)
+        # Create orchestrator with default db_config.json
+        orchestrator = DataGeneratorOrchestrator(config)
 
         # Generate the requested number of rows
         rows = orchestrator.generate_rows(args.rows)

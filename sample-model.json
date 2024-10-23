@@ -1,0 +1,58 @@
+
+    [
+        {
+            "column":"first_name",
+            "type": "string",
+            "size": 200,
+            "generator": "faker",
+            "faker_method": "first_name"
+        },
+        {
+            "column": "email",
+            "type": "string",
+            "generator": "faker",
+            "faker_method": "email"
+        },
+        {
+            "column":"last_name",
+            "type": "string",
+            "size": 20,
+            "generator": "faker",
+            "faker_method": "last_name"
+        },
+        {
+            "column":"age",
+            "type": "int",
+            "generator": "random"
+        },
+        {
+            "column": "psi",
+            "type": "string",
+            "size": 10,
+            "generator": "db-lookup",
+            "sql": "select distinct pi from analytics_enrollment_ezkn8vyzwjr"
+        },
+        {
+            "column": "created_at",
+            "type": "datetime",
+            "generator": "random"
+        },
+        {
+            "column": "temperature",
+            "type": "float",
+            "generator": "random",
+            "min": 0.0,
+            "max": 100.0
+        },
+        {
+            "column": "defined_at",
+            "type": "datetime",
+            "generator": "random",
+            "min": 1972,
+            "max": 2024
+    }
+]
+     
+ 
+ 
+ 
