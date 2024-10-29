@@ -28,6 +28,7 @@ class ColumnDefinition:
     sql: str = None  # SQL query for db-lookup generator
     value: Any = None  # Static value for static generator
     values: List[Any] = None  # List of values for list generator
+    reference_column: str = None  # For lookup generator to reference another column's value
 
 
 class ConfigurationError(Exception):
@@ -197,6 +198,58 @@ class ListGenerator(DataGenerator):
         return random.choice(self.values)
 
 
+class LookupGenerator(DataGenerator):
+    """Generates values by looking up from another column's db-lookup generator"""
+
+    def __init__(self, reference_column: str, generators: Dict[str, DataGenerator]):
+        self.reference_column = reference_column
+        self.generators = generators
+        self._validate_reference()
+        self._cache = {}
+
+    def _validate_reference(self):
+        # Parse reference in format "column.field"
+        try:
+            column, field = self.reference_column.split('.')
+        except ValueError:
+            raise ConfigurationError(f"Invalid reference_column format: {self.reference_column}. Expected format: column.field")
+
+        if column not in self.generators:
+            raise ConfigurationError(f"Referenced column '{column}' not found")
+        
+        referenced_generator = self.generators[column]
+        if not isinstance(referenced_generator, QueryBasedGenerator):
+            raise ConfigurationError(f"Referenced column '{column}' must be a db-lookup generator")
+
+    def generate(self) -> Any:
+        column = self.reference_column.split('.')[0]
+        field = self.reference_column.split('.')[1]
+        
+        # Get the referenced generator
+        referenced_generator = self.generators[column]
+        
+        # Get the full row data from the referenced generator
+        if column not in self._cache:
+            cursor = referenced_generator.connection.cursor()
+            cursor.execute(referenced_generator.query)
+            rows = cursor.fetchall()
+            cursor.close()
+            
+            # Get column names from cursor description
+            column_names = [desc[0] for desc in cursor.description]
+            
+            # Find the index of our desired field
+            try:
+                field_index = column_names.index(field)
+            except ValueError:
+                raise ConfigurationError(f"Field '{field}' not found in query results for column '{column}'")
+            
+            self._cache[column] = [row[field_index] for row in rows]
+            
+        # Return a random value from the cached field values
+        return random.choice(self._cache[column])
+
+
 class StaticGenerator(DataGenerator):
     """Generates a static value"""
 
@@ -229,8 +282,9 @@ class QueryBasedGenerator(DataGenerator):
 class DataGeneratorFactory:
     """Factory class to create appropriate generators based on column definitions"""
 
-    def __init__(self, db_connection=None):
+    def __init__(self, db_connection=None, generators=None):
         self.db_connection = db_connection
+        self.generators = generators
 
     def create_generator(self, column_def: ColumnDefinition) -> DataGenerator:
         if column_def.generator == "faker":
@@ -275,6 +329,10 @@ class DataGeneratorFactory:
             if not column_def.values:
                 raise ValueError(f"Values list required for list generator. Invalid column: {column_def.column}")
             return ListGenerator(column_def.values)
+        elif column_def.generator == "lookup":
+            if not column_def.reference_column:
+                raise ValueError(f"reference_column required for lookup generator. Invalid column: {column_def.column}")
+            return LookupGenerator(column_def.reference_column, self.generators)
 
         raise ValueError(f"Unsupported generator type: {column_def.generator}")
 
@@ -286,8 +344,9 @@ class DataGeneratorOrchestrator:
         self.config = self._load_config(config_file)
         self.db_config = self._load_db_config(db_config_file)
         self.db_connection = self._create_db_connection()
-        self.factory = DataGeneratorFactory(self.db_connection)
-        self.generators = self._setup_generators()
+        self.generators = {}  # Initialize empty dict
+        self._setup_non_lookup_generators()  # First setup all non-lookup generators
+        self._setup_lookup_generators()  # Then setup lookup generators
 
     def _load_db_config(self, config_file: str) -> dict:
         if not os.path.exists(config_file):
@@ -315,17 +374,33 @@ class DataGeneratorOrchestrator:
 
         return [ColumnDefinition(**col_def) for col_def in config_data]
 
-    def _setup_generators(self) -> Dict[str, DataGenerator]:
-        return {
-            col_def.column: self.factory.create_generator(col_def)
-            for col_def in self.config
-        }
+    def _setup_non_lookup_generators(self):
+        """First pass: setup all generators except lookup type"""
+        factory = DataGeneratorFactory(self.db_connection, self.generators)
+        for col_def in self.config:
+            if col_def.generator != "lookup":
+                print(f"Setting up generator for column: {col_def.column} (type: {col_def.generator})")
+                self.generators[col_def.column] = factory.create_generator(col_def)
+
+    def _setup_lookup_generators(self):
+        """Second pass: setup lookup generators now that other generators exist"""
+        factory = DataGeneratorFactory(self.db_connection, self.generators)
+        for col_def in self.config:
+            if col_def.generator == "lookup":
+                print(f"Setting up generator for column: {col_def.column} (type: {col_def.generator})")
+                self.generators[col_def.column] = factory.create_generator(col_def)
 
     def generate_row(self) -> Dict[str, Any]:
-        return {
-            column: generator.generate()
-            for column, generator in self.generators.items()
-        }
+        # First get all column names from config to maintain order
+        row = {col_def.column: None for col_def in self.config}
+        
+        # Then generate values for each column
+        for column, generator in self.generators.items():
+            value = generator.generate()
+            print(f"Generated value for {column}: {value}")
+            row[column] = value
+            
+        return row
 
     def generate_rows(self, count: int) -> List[Dict[str, Any]]:
         return [self.generate_row() for _ in range(count)]
