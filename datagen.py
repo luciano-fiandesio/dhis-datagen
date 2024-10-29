@@ -198,6 +198,39 @@ class ListGenerator(DataGenerator):
         return random.choice(self.values)
 
 
+class ExpressionGenerator(DataGenerator):
+    """Generates values by combining values from other columns using an expression template"""
+
+    def __init__(self, expression: str, generators: Dict[str, DataGenerator]):
+        self.expression = expression
+        self.generators = generators
+        self._validate_expression()
+
+    def _validate_expression(self):
+        # Extract column names from the expression (anything between {} brackets)
+        import re
+        column_names = re.findall(r'{(\w+)}', self.expression)
+        
+        # Verify all referenced columns exist
+        for column in column_names:
+            if column not in self.generators:
+                raise ConfigurationError(f"Referenced column '{column}' not found in expression: {self.expression}")
+
+    def generate(self) -> str:
+        # Generate a value for each referenced column
+        values = {}
+        import re
+        for column in re.findall(r'{(\w+)}', self.expression):
+            values[column] = str(self.generators[column].generate())
+        
+        # Replace the placeholders with actual values
+        result = self.expression
+        for column, value in values.items():
+            result = result.replace(f'{{{column}}}', value)
+        
+        return result
+
+
 class LookupGenerator(DataGenerator):
     """Generates values by looking up from another column's db-lookup generator"""
 
@@ -333,6 +366,10 @@ class DataGeneratorFactory:
             if not column_def.reference_column:
                 raise ValueError(f"reference_column required for lookup generator. Invalid column: {column_def.column}")
             return LookupGenerator(column_def.reference_column, self.generators)
+        elif column_def.generator == "expression":
+            if not column_def.value:
+                raise ValueError(f"value (expression template) required for expression generator. Invalid column: {column_def.column}")
+            return ExpressionGenerator(column_def.value, self.generators)
 
         raise ValueError(f"Unsupported generator type: {column_def.generator}")
 
