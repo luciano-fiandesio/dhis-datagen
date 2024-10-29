@@ -26,6 +26,8 @@ class ColumnDefinition:
     max: int = None
     query: str = None
     sql: str = None  # SQL query for db-lookup generator
+    value: Any = None  # Static value for static generator
+    values: List[Any] = None  # List of values for list generator
 
 
 class ConfigurationError(Exception):
@@ -183,6 +185,28 @@ class FakerGenerator(DataGenerator):
         return faker_function()
 
 
+class ListGenerator(DataGenerator):
+    """Generates random values from a predefined list"""
+
+    def __init__(self, values: List[Any]):
+        if not values:
+            raise ValueError("List generator requires non-empty values list")
+        self.values = values
+
+    def generate(self) -> Any:
+        return random.choice(self.values)
+
+
+class StaticGenerator(DataGenerator):
+    """Generates a static value"""
+
+    def __init__(self, value: Any):
+        self.value = value
+
+    def generate(self) -> Any:
+        return self.value
+
+
 class QueryBasedGenerator(DataGenerator):
     """Generates values based on database queries"""
 
@@ -231,15 +255,26 @@ class DataGeneratorFactory:
                     min_year=column_def.min, max_year=column_def.max
                 )
         elif column_def.generator == "db-lookup":
+
+            if not column_def.sql:
+                raise ValueError(
+                    f"SQL query required for db-lookup generator. Invalid column: {column_def.column}"
+                )
             if self.db_connection is None:
                 raise ValueError("Database connection required for db-lookup generator")
             return QueryBasedGenerator(self.db_connection, column_def.sql)
-        elif column_def.generator.startswith("select"):  # Keep legacy support
+        elif column_def.generator.startswith("select"):
             if self.db_connection is None:
                 raise ValueError(
                     "Database connection required for query-based generator"
                 )
             return QueryBasedGenerator(self.db_connection, column_def.generator)
+        elif column_def.generator == "static":
+            return StaticGenerator(column_def.value)
+        elif column_def.generator == "list":
+            if not column_def.values:
+                raise ValueError(f"Values list required for list generator. Invalid column: {column_def.column}")
+            return ListGenerator(column_def.values)
 
         raise ValueError(f"Unsupported generator type: {column_def.generator}")
 
