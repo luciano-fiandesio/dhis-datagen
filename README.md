@@ -4,8 +4,23 @@ This tool generates mass data for the DHIS2 project.
 
 ## Database configuration
 
+A database connection is required to generate data.
+
 The database configuration is stored in `db_config.json`.
 
+Example:
+
+```json
+{
+    "database": {
+        "host": "localhost",
+        "port": 5432,
+        "name": "db",
+        "user": "demo",
+        "password": "demo"
+    }
+}
+```
 
 ## Usage
 
