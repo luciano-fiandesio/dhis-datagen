@@ -199,34 +199,32 @@ class ListGenerator(DataGenerator):
 
 
 class ExpressionGenerator(DataGenerator):
-    """Generates values by combining values from other columns using an expression template"""
+    """Generates values by combining already generated values from other columns using an expression template"""
 
-    def __init__(self, expression: str, generators: Dict[str, DataGenerator]):
+    def __init__(self, expression: str):
         self.expression = expression
-        self.generators = generators
         self._validate_expression()
 
     def _validate_expression(self):
         # Extract column names from the expression (anything between {} brackets)
         import re
-        column_names = re.findall(r'{(\w+)}', self.expression)
+        self.required_columns = re.findall(r'{(\w+)}', self.expression)
         
-        # Verify all referenced columns exist
-        for column in column_names:
-            if column not in self.generators:
-                raise ConfigurationError(f"Referenced column '{column}' not found in expression: {self.expression}")
+        if not self.required_columns:
+            raise ConfigurationError(f"No column references found in expression: {self.expression}")
 
-    def generate(self) -> str:
-        # Generate a value for each referenced column
-        values = {}
-        import re
-        for column in re.findall(r'{(\w+)}', self.expression):
-            values[column] = str(self.generators[column].generate())
+    def generate(self, row_values: Dict[str, Any]) -> str:
+        # Verify all required columns have values
+        for column in self.required_columns:
+            if column not in row_values:
+                raise ConfigurationError(f"Required column '{column}' not found in row values")
+            if row_values[column] is None:
+                raise ConfigurationError(f"Required column '{column}' has no value")
         
         # Replace the placeholders with actual values
         result = self.expression
-        for column, value in values.items():
-            result = result.replace(f'{{{column}}}', value)
+        for column in self.required_columns:
+            result = result.replace(f'{{{column}}}', str(row_values[column]))
         
         return result
 
@@ -363,7 +361,7 @@ class DataGeneratorFactory:
         elif column_def.generator == "expression":
             if not column_def.value:
                 raise ValueError(f"value (expression template) required for expression generator. Invalid column: {column_def.column}")
-            return ExpressionGenerator(column_def.value, self.generators)
+            return ExpressionGenerator(column_def.value)
 
         raise ValueError(f"Unsupported generator type: {column_def.generator}")
 
@@ -425,11 +423,21 @@ class DataGeneratorOrchestrator:
         # First get all column names from config to maintain order
         row = {col_def.column: None for col_def in self.config}
         
-        # Then generate values for each column
-        for column, generator in self.generators.items():
-            value = generator.generate()
-            print(f"Generated value for {column}: {value}")
-            row[column] = value
+        # First generate values for non-expression columns
+        for col_def in self.config:
+            if col_def.generator != "expression":
+                generator = self.generators[col_def.column]
+                value = generator.generate()
+                print(f"Generated value for {col_def.column}: {value}")
+                row[col_def.column] = value
+        
+        # Then handle expression columns using the generated values
+        for col_def in self.config:
+            if col_def.generator == "expression":
+                generator = self.generators[col_def.column]
+                value = generator.generate(row)
+                print(f"Generated expression value for {col_def.column}: {value}")
+                row[col_def.column] = value
             
         return row
 
