@@ -350,12 +350,6 @@ class DataGeneratorFactory:
             if self.db_connection is None:
                 raise ValueError("Database connection required for db-lookup generator")
             return QueryBasedGenerator(self.db_connection, column_def.sql)
-        elif column_def.generator.startswith("select"):
-            if self.db_connection is None:
-                raise ValueError(
-                    "Database connection required for query-based generator"
-                )
-            return QueryBasedGenerator(self.db_connection, column_def.generator)
         elif column_def.generator == "static":
             return StaticGenerator(column_def.value)
         elif column_def.generator == "list":
