@@ -7,7 +7,7 @@ import string
 import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Union
 
 import psycopg2
 from faker import Faker
@@ -281,6 +281,7 @@ class LookupGenerator(DataGenerator):
         return random.choice(self._cache[column])
 
 
+
 class StaticGenerator(DataGenerator):
     """Generates a static value"""
 
@@ -289,6 +290,19 @@ class StaticGenerator(DataGenerator):
 
     def generate(self) -> Any:
         return self.value
+
+
+class RandomNumericGenerator(DataGenerator):
+    """Generates random numeric values as string or number based on column type"""
+
+    def __init__(self, min_val: float = 0.0, max_val: float = 100.0, as_string: bool = False):
+        self.min_val = float(min_val) if min_val is not None else 0.0
+        self.max_val = float(max_val) if max_val is not None else sys.float_info.max
+        self.as_string = as_string
+
+    def generate(self) -> Union[str, float]:
+        value = random.uniform(self.min_val, self.max_val)
+        return str(value) if self.as_string else value
 
 
 class QueryBasedGenerator(DataGenerator):
@@ -339,6 +353,12 @@ class DataGeneratorFactory:
                 return RandomDateTimeGenerator(
                     min_year=column_def.min, max_year=column_def.max
                 )
+        elif column_def.generator == "random-numeric":
+            return RandomNumericGenerator(
+                min_val=column_def.min,
+                max_val=column_def.max,
+                as_string=column_def.type == "string"
+            )
         elif column_def.generator == "db-lookup":
 
             if not column_def.sql:

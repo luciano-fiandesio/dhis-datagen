@@ -64,6 +64,13 @@ def get_column_info(connection, table_name: str) -> List[Dict]:
                 "generator": "random"
             }
             
+        elif data_type == 'boolean':
+            config_entry = {
+                "column": column_name,
+                "type": "boolean",
+                "generator": "random"
+            }
+            
         else:
             # Default to string type for unknown types
             config_entry = {
