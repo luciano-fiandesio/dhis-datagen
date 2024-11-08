@@ -389,7 +389,8 @@ class DataGeneratorFactory:
 class DataGeneratorOrchestrator:
     """Main class to orchestrate data generation"""
 
-    def __init__(self, config_file: str, db_config_file: str = "db_config.json"):
+    def __init__(self, config_file: str, db_config_file: str = "db_config.json", debug: bool = False):
+        self.debug = debug
         self.config = self._load_config(config_file)
         self.db_config = self._load_db_config(db_config_file)
         self.db_connection = self._create_db_connection()
@@ -428,7 +429,7 @@ class DataGeneratorOrchestrator:
         factory = DataGeneratorFactory(self.db_connection, self.generators)
         for col_def in self.config:
             if col_def.generator != "lookup":
-                print(f"Setting up generator for column: {col_def.column} (type: {col_def.generator})")
+                debug_log(f"Setting up generator for column: {col_def.column} (type: {col_def.generator})", self.debug)
                 self.generators[col_def.column] = factory.create_generator(col_def)
 
     def _setup_lookup_generators(self):
@@ -436,7 +437,7 @@ class DataGeneratorOrchestrator:
         factory = DataGeneratorFactory(self.db_connection, self.generators)
         for col_def in self.config:
             if col_def.generator == "lookup":
-                print(f"Setting up generator for column: {col_def.column} (type: {col_def.generator})")
+                debug_log(f"Setting up generator for column: {col_def.column} (type: {col_def.generator})", self.debug)
                 self.generators[col_def.column] = factory.create_generator(col_def)
 
     def generate_row(self) -> Dict[str, Any]:
@@ -448,7 +449,7 @@ class DataGeneratorOrchestrator:
             if col_def.generator != "expression":
                 generator = self.generators[col_def.column]
                 value = generator.generate()
-                print(f"Generated value for {col_def.column}: {value}")
+                debug_log(f"Generated value for {col_def.column}: {value}", self.debug)
                 row[col_def.column] = value
         
         # Then handle expression columns using the generated values
@@ -456,7 +457,7 @@ class DataGeneratorOrchestrator:
             if col_def.generator == "expression":
                 generator = self.generators[col_def.column]
                 value = generator.generate(row)
-                print(f"Generated expression value for {col_def.column}: {value}")
+                debug_log(f"Generated expression value for {col_def.column}: {value}", self.debug)
                 row[col_def.column] = value
             
         return row
@@ -464,6 +465,11 @@ class DataGeneratorOrchestrator:
     def generate_rows(self, count: int) -> List[Dict[str, Any]]:
         return [self.generate_row() for _ in range(count)]
 
+
+def debug_log(msg: str, debug_enabled: bool = False):
+    """Print debug messages if debug mode is enabled"""
+    if debug_enabled:
+        print(f"[DEBUG] {msg}")
 
 def parse_arguments():
     """Parse and validate command line arguments"""
@@ -478,6 +484,11 @@ def parse_arguments():
         "--output",
         default="output.csv",
         help="Output CSV file path (default: output.csv)",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug logging",
     )
 
     return parser.parse_args()
@@ -494,7 +505,7 @@ def main():
 
         # Set up database connection if provided
         # Create orchestrator with default db_config.json
-        orchestrator = DataGeneratorOrchestrator(config)
+        orchestrator = DataGeneratorOrchestrator(config, debug=args.debug)
 
         # Generate the requested number of rows
         rows = orchestrator.generate_rows(args.rows)
